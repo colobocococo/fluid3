@@ -4,7 +4,7 @@ using namespace std;
 
 constexpr size_t N = 36, M = 84;
 // constexpr size_t N = 14, M = 5;
-constexpr size_t T = 30;
+constexpr size_t T = 100;
 constexpr std::array<pair<int, int>, 4> deltas{{{-1, 0}, {1, 0}, {0, -1}, {0, 1}}};
 
 // char field[N][M + 1] = {
@@ -24,7 +24,7 @@ constexpr std::array<pair<int, int>, 4> deltas{{{-1, 0}, {1, 0}, {0, -1}, {0, 1}
 //     "#####",
 // };
 
-string field[N] = {
+char field[N][M + 1] = {
     "####################################################################################",
     "#                                                                                  #",
     "#                                                                                  #",
@@ -62,11 +62,6 @@ string field[N] = {
     "#                                                                                  #",
     "####################################################################################",
 };
-
-void start() {
-    for (int i = 0; i < N; i++)
-        for (int j = 84; j < M; j++) field[i] += '#';
-}
 
 struct Fixed {
     constexpr Fixed(int v): v(v << 16) {}
@@ -159,58 +154,48 @@ int UT = 0;
 
 
 mt19937 rnd(1337);
-mutex h;
 
 tuple<Fixed, bool, pair<int, int>> propagate_flow(int x, int y, Fixed lim) {
-    h.lock();
     last_use[x][y] = UT - 1;
-    h.unlock();
     Fixed ret = 0;
     for (auto [dx, dy] : deltas) {
         int nx = x + dx, ny = y + dy;
         if (field[nx][ny] != '#' && last_use[nx][ny] < UT) {
-            h.lock();
-            auto cap = velocity.get(x, y, dx, dy); //global
-            auto flow = velocity_flow.get(x, y, dx, dy); //global
-            h.unlock();
+            auto cap = velocity.get(x, y, dx, dy);
+            auto flow = velocity_flow.get(x, y, dx, dy);
             if (flow == cap) {
                 continue;
             }
             // assert(v >= velocity_flow.get(x, y, dx, dy));
             auto vp = min(lim, cap - flow);
             if (last_use[nx][ny] == UT - 1) {
-                h.lock();
                 velocity_flow.add(x, y, dx, dy, vp);
                 last_use[x][y] = UT;
-                h.unlock();
                 // cerr << x << " " << y << " -> " << nx << " " << ny << " " << vp << " / " << lim << "\n";
                 return {vp, 1, {nx, ny}};
             }
-
-            tuple<Fixed, bool, pair<int, int>> res = propagate_flow(nx, ny, vp);
-            h.lock();
-            auto [t, prop1, end] = res;
-            h.unlock();
-
+            auto [t, prop, end] = propagate_flow(nx, ny, vp);
             ret += t;
-            if (prop1) {
-                h.lock();
+            if (prop) {
                 velocity_flow.add(x, y, dx, dy, t);
                 last_use[x][y] = UT;
-                h.unlock();
                 // cerr << x << " " << y << " -> " << nx << " " << ny << " " << t << " / " << lim << "\n";
-                return {t, prop1 && end != pair(x, y), end};
+                return {t, prop && end != pair(x, y), end};
             }
         }
     }
-    h.lock();
     last_use[x][y] = UT;
-    h.unlock();
     return {ret, 0, {0, 0}};
 }
 
+int mod1 = 998244353, mod2 = 1e9 + 7;
+int ff = mod1;
 Fixed random01() {
-    return Fixed::from_raw((rnd() & ((1 << 16) - 1)));
+    ff = rand();
+    //cout << ff << ' ';
+    int y = 65535;
+    //cout << x << ' ';
+    return Fixed::from_raw(ff & y);
 }
 
 void propagate_stop(int x, int y, bool force = false) {
@@ -233,8 +218,6 @@ void propagate_stop(int x, int y, bool force = false) {
         if (field[nx][ny] == '#' || last_use[nx][ny] == UT || velocity.get(x, y, dx, dy) > 0) {
             continue;
         }
-        //thread a(propagate_stop, nx, ny, false);
-        //a.detach();
         propagate_stop(nx, ny);
     }
 }
@@ -325,232 +308,97 @@ bool propagate_move(int x, int y, bool is_first) {
 }
 
 int dirs[N][M]{};
-Fixed total_delta_p; //global, need mutex
-
-mutex m;
-int n_threads = 1000;
-Fixed g = 0.1;
-bool prop;
-
-void f1(size_t l, size_t r) {
-    while (l < r) {
-        size_t x = l/M, y = l%M;
-        if (field[x][y] == '#') {
-            l++;
-            continue;
-        }
-        for (auto [dx, dy] : deltas) {
-            dirs[x][y] += (field[x + dx][y + dy] != '#');
-        }
-        l++;
-    }
-}
-
-void f2(size_t l, size_t r) {
-    while (l < r) {
-        size_t x = l/M, y = l%M;
-        if (field[x][y] == '#') {
-            l++;
-            continue;
-        }
-        for (auto [dx, dy] : deltas) {
-            int nx = x + dx, ny = y + dy;
-            if (field[nx][ny] != '#' && old_p[nx][ny] < old_p[x][y]) {
-                auto delta_p = old_p[x][y] - old_p[nx][ny];
-                auto force = delta_p;
-                auto &contr = velocity.get(nx, ny, -dx, -dy);
-                if (contr * rho[(int) field[nx][ny]] >= force) {
-                    contr -= force / rho[(int) field[nx][ny]];
-                    continue;
-                }
-                force -= contr * rho[(int) field[nx][ny]];
-                contr = 0;
-                p[x][y] -= force / dirs[x][y];
-                m.lock();
-                velocity.add(x, y, dx, dy, force / rho[(int) field[x][y]]); //global
-                total_delta_p -= force / dirs[x][y]; //must be a mutex
-                m.unlock();
-            }
-        }
-        l++;
-    }
-}
-
-void f3(size_t l, size_t r) {
-    while (l < r) {
-        size_t x = l/M, y = l%M;
-        if (field[x][y] == '#') {
-            l++;
-            continue;
-        }
-        for (auto [dx, dy] : deltas) {
-            m.lock();
-            auto old_v = velocity.get(x, y, dx, dy);
-            auto new_v = velocity_flow.get(x, y, dx, dy);
-            if (old_v > 0) {
-                assert(new_v <= old_v);
-                velocity.get(x, y, dx, dy) = new_v;
-                auto force = (old_v - new_v) * rho[(int) field[x][y]];
-                if (field[x][y] == '.')
-                    force *= 0.8;
-                if (field[x + dx][y + dy] == '#') {
-                    p[x][y] += force / dirs[x][y];
-                    total_delta_p += force / dirs[x][y];
-                } else {
-                    p[x + dx][y + dy] += force / dirs[x + dx][y + dy];
-                    total_delta_p += force / dirs[x + dx][y + dy];
-                }
-            }
-            m.unlock();
-        }
-        l++;
-    }
-}
-
-void f4(size_t l, size_t r) {
-    while (l < r) {
-        size_t x = l/M, y = l%M;
-        if (field[x][y] == '#') {
-            l++;
-            continue;
-        }
-        if (field[x + 1][y] != '#') {
-            m.lock();
-            velocity.add(x, y, 1, 0, g);
-            m.unlock();
-        }
-        l++;
-        //cout << l;
-    }
-}
-
-void f5(size_t l, size_t r) {
-    //m.lock();
-    while (l < r) {
-        size_t x = l/84, y = l%84;
-        if (field[x][y] != '#' && last_use[x][y] < UT - 1) {
-            //m.lock();
-            auto [t, local_prop, _] = propagate_flow(x, y, 1);
-            //m.unlock();
-            if (t > 0) {
-                m.lock();
-                prop = 1;
-                m.unlock();
-            }
-        }
-        l++;
-    }
-    //m.unlock();
-}
-
-void f6(size_t l) {
-    size_t r = N*M;
-    //m.lock();
-    while (l < r) {
-        size_t x = l/M, y = l%M;
-        //cout << M << ' ';
-        if (field[x][y] != '#' && last_use[x][y] < UT - 1) {
-            m.lock();
-            auto [t, local_prop, _] = propagate_flow(x, y, 1);
-            //m.unlock();
-            if (t > 0) {
-                //m.lock();
-                prop = 1;
-                //m.unlock();
-            }
-            m.unlock();
-        }
-        l += n_threads;
-    }
-    //m.unlock();
-}
 
 int main() {
-    start();
-    n_threads = 1;
-    size_t piece = N*M/n_threads;
     rho[' '] = 0.01;
     rho['.'] = 1000;
+    Fixed g = 0.1;
 
-    //cout << clock() << "\n";
-
-    int tm = 0, tm1 = 0, tm2 = 0, tm3 = 0, tm4 = 0, tm5 = 0;
-    tm1 -= clock();
-    for (int k = n_threads - 1; k >= 0; k--) {
-        size_t l = k*piece, r = min(N*M, (k+1)*piece);
-        //f1(l, r);
-        thread a(f1, l, r);
-        if (k) a.detach();
-        else a.join();
+    vector <pair <size_t, size_t>> crd;
+    for (size_t x = 0; x < N; ++x) {
+        for (size_t y = 0; y < M; ++y) {
+            if (field[x][y] == '#')
+                continue;
+            for (auto [dx, dy] : deltas) {
+                dirs[x][y] += (field[x + dx][y + dy] != '#');
+            }
+            crd.push_back({x,y});
+        }
     }
-    tm1 += clock();
 
-
-    tm -= clock();
+    //size_t x, y;
     for (size_t i = 0; i < T; ++i) {
         
-        total_delta_p = 0;
+        Fixed total_delta_p = 0;
         // Apply external forces
-        tm4 -= clock();
-        for (int k = n_threads - 1; k >= 0; k--) {
-            size_t l = k*piece, r = min(N*M, (k+1)*piece);
-            //f4(l, r);
-            thread a(f4, l, r);
-            if (k) a.detach();
-            else a.join();
+        for (auto [x, y] : crd){
+            velocity.add(x, y, 1, 0, g);
         }
-        tm4 += clock();
 
-        // Apply forces from p
+        // Apply forces from p'
         memcpy(old_p, p, sizeof(p));
-        tm2 -= clock();
-        for (int k = n_threads - 1; k >= 0; k--) {
-            size_t l = k*piece, r = min(N*M, (k+1)*piece);
-            //f2(l, r);
-            thread a(f2, l, r);
-            if (k) a.detach();
-            else a.join();
+        for (auto [x, y] : crd) {
+                for (auto [dx, dy] : deltas) {
+                    int nx = x + dx, ny = y + dy;
+                    if (field[nx][ny] != '#' && old_p[nx][ny] < old_p[x][y]) {
+                        auto delta_p = old_p[x][y] - old_p[nx][ny];
+                        auto force = delta_p;
+                        auto &contr = velocity.get(nx, ny, -dx, -dy);
+                        if (contr * rho[(int) field[nx][ny]] >= force) {
+                            contr -= force / rho[(int) field[nx][ny]];
+                            continue;
+                        }
+                        force -= contr * rho[(int) field[nx][ny]];
+                        contr = 0;
+                        velocity.add(x, y, dx, dy, force / rho[(int) field[x][y]]);
+                        p[x][y] -= force / dirs[x][y];
+                        total_delta_p -= force / dirs[x][y];
+                    }
+                }
         }
-        tm2 += clock();
 
         // Make flow from velocities
         velocity_flow = {};
-        tm5 -= clock();
-        prop = false;
-        UT += 2;
+        bool prop = false;
         do {
-            m.lock();
             UT += 2;
             prop = 0;
-            m.unlock();
-            for (size_t k = 0; k < n_threads; k++) {
-                //f6(k);
-                thread a(f6, k);
-                if (k + 1 < n_threads) a.detach();
-                else a.join();
+            for (auto [x, y] : crd) {
+                    if (last_use[x][y] != UT) {
+                        auto [t, local_prop, _] = propagate_flow(x, y, 1);
+                        if (t > 0) {
+                            prop = 1;
+                        }
+                    }
             }
-            //f5(0, N*84);
-            int tt = 1000;
-            while (tt--);
         } while (prop);
-        tm5 += clock();
+
         // Recalculate p with kinetic energy
-        tm3 -= clock();
-        for (int k = n_threads - 1; k >= 0; k--) {
-            size_t l = k*piece, r = min(N*M, (k+1)*piece);
-            //f3(l, r);
-            thread a(f3, l, r);
-            if (k) a.detach();
-            else a.join();
+        for (auto [x, y] : crd) {
+                for (auto [dx, dy] : deltas) {
+                    auto old_v = velocity.get(x, y, dx, dy);
+                    auto new_v = velocity_flow.get(x, y, dx, dy);
+                    if (old_v > 0) {
+                        assert(new_v <= old_v);
+                        velocity.get(x, y, dx, dy) = new_v;
+                        auto force = (old_v - new_v) * rho[(int) field[x][y]];
+                        if (field[x][y] == '.')
+                            force *= 0.8;
+                        if (field[x + dx][y + dy] == '#') {
+                            p[x][y] += force / dirs[x][y];
+                            total_delta_p += force / dirs[x][y];
+                        } else {
+                            p[x + dx][y + dy] += force / dirs[x + dx][y + dy];
+                            total_delta_p += force / dirs[x + dx][y + dy];
+                        }
+                    }
+                }
         }
-        if (n_threads > 1) this_thread::sleep_for(1ms);
-        tm3 += clock();
 
         UT += 2;
         prop = false;
-        for (size_t x = 0; x < N; ++x) {
-            for (size_t y = 0; y < M; ++y) {
-                if (field[x][y] != '#' && last_use[x][y] != UT) {
+        for (auto [x, y] : crd) {
+                if (last_use[x][y] != UT) {
                     if (random01() < move_prob(x, y)) {
                         prop = true;
                         propagate_move(x, y, true);
@@ -558,19 +406,14 @@ int main() {
                         propagate_stop(x, y, true);
                     }
                 }
-            }
         }
 
-        //prop = false;
-        if (prop) { //can't speed up this
+        if (prop) {
             cout << "Tick " << i << ":\n";
             for (size_t x = 0; x < N; ++x) {
                 //cout << field[x] << "\n";
             }
         }
     }
-
-    tm += clock();
-    cout << tm1 << ' ' << tm2 << ' ' << tm3 << ' ' << tm4 << ' ' << tm5;
-    cout << "\n" << clock();
+    cout << clock();
 }
