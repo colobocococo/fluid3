@@ -464,7 +464,7 @@ void f6(size_t l, size_t r) {
 
 int main() {
     start();
-    n_threads = 10;
+    cin >> n_threads; //количество нитей
     size_t piece = N*M/n_threads;
     rho[' '] = 0.01;
     rho['.'] = 1000;
