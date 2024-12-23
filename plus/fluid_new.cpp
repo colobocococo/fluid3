@@ -135,6 +135,13 @@ Fixed rho[256];
 
 Fixed p[N][M]{}, old_p[N][M];
 
+vector <vector <int>> cord = {{0,0},{2,0,3},{0,1}};
+
+int findcrd(int a, int b) {
+    a++, b++;
+    return cord[a][b];
+}
+
 struct VectorField {
     array<Fixed, deltas.size()> v[N][M];
     Fixed &add(int x, int y, int dx, int dy, Fixed dv) {
@@ -142,7 +149,18 @@ struct VectorField {
     }
 
     Fixed &get(int x, int y, int dx, int dy) {
-        size_t i = ranges::find(deltas, pair(dx, dy)) - deltas.begin();
+        bool optimize;
+        optimize = true;
+        size_t i;
+        if (!optimize) {
+            i = ranges::find(deltas, pair(dx, dy)) - deltas.begin();
+
+        }
+        else {
+            //i = 2*abs(dy) + (dx + dy + 1)/2;
+            i = findcrd(dx, dy);
+        }
+
         assert(i < deltas.size());
         return v[x][y][i];
     }
@@ -189,11 +207,12 @@ tuple<Fixed, bool, pair<int, int>> propagate_flow(int x, int y, Fixed lim) {
 }
 
 int mod1 = 998244353, mod2 = 1e9 + 7;
-int ff = mod1;
+int ff = 0;
 Fixed random01() {
-    ff = rand();
+    ff = rnd();
     //cout << ff << ' ';
     int y = 65535;
+    //ff %= y;
     //cout << x << ' ';
     return Fixed::from_raw(ff & y);
 }
